@@ -1,0 +1,141 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
+
+import '../../../order/domain/entities/order.dart';
+import '../../../order/domain/entities/order_status.dart';
+import '../../data/datasources/transaction_remote_data_source_impl.dart';
+import '../../data/repositories/order_repository_impl.dart' as transaction_repo;
+
+final firebaseFirestoreProvider = Provider((ref) => FirebaseFirestore.instance);
+
+// Data Sources
+final transactionRemoteDataSourceProvider = Provider((ref) {
+  final firestore = ref.watch(firebaseFirestoreProvider);
+  return TransactionRemoteDataSourceImpl(firestore: firestore);
+});
+
+// Repository
+final transactionRepositoryProvider = Provider((ref) {
+  final remoteDataSource = ref.watch(transactionRemoteDataSourceProvider);
+  return transaction_repo.TransactionRepositoryImpl(remoteDataSource: remoteDataSource);
+});
+
+// State
+class TransactionState {
+  final List<Order> transactions;
+  final Order? selectedTransaction;
+  final bool isLoading;
+  final String? error;
+
+  TransactionState({
+    this.transactions = const [],
+    this.selectedTransaction,
+    this.isLoading = false,
+    this.error,
+  });
+
+  TransactionState copyWith({
+    List<Order>? transactions,
+    Order? selectedTransaction,
+    bool? isLoading,
+    String? error,
+  }) {
+    return TransactionState(
+      transactions: transactions ?? this.transactions,
+      selectedTransaction: selectedTransaction ?? this.selectedTransaction,
+      isLoading: isLoading ?? this.isLoading,
+      error: error,
+    );
+  }
+}
+
+// State Notifier
+class TransactionNotifier extends Notifier<TransactionState> {
+  late final transaction_repo.TransactionRepositoryImpl repository;
+
+  @override
+  TransactionState build() {
+    repository = ref.watch(transactionRepositoryProvider);
+    return TransactionState();
+  }
+
+  Future<void> fetchTransactions(String customerId) async {
+    state = state.copyWith(isLoading: true, error: null);
+    final result = await repository.getOrdersByCustomer(customerId);
+
+    result.fold(
+      (failure) => state = state.copyWith(
+        isLoading: false,
+        error: failure.toString(),
+      ),
+      (transactions) => state = state.copyWith(
+        isLoading: false,
+        transactions: transactions,
+      ),
+    );
+  }
+
+  Future<void> fetchTransactionById(String transactionId) async {
+    state = state.copyWith(isLoading: true, error: null);
+    final result = await repository.getOrderById(transactionId);
+
+    result.fold(
+      (failure) => state = state.copyWith(
+        isLoading: false,
+        error: failure.toString(),
+      ),
+      (transaction) => state = state.copyWith(
+        isLoading: false,
+        selectedTransaction: transaction,
+      ),
+    );
+  }
+
+  Future<void> cancelTransaction(String transactionId) async {
+    state = state.copyWith(isLoading: true, error: null);
+    final result = await repository.cancelOrder(transactionId);
+
+    result.fold(
+      (failure) => state = state.copyWith(
+        isLoading: false,
+        error: failure.toString(),
+      ),
+      (_) {
+        final updatedTransactions = state.transactions
+            .where((t) => t.id != transactionId)
+            .toList();
+        state = state.copyWith(
+          isLoading: false,
+          transactions: updatedTransactions,
+        );
+      },
+    );
+  }
+
+  Future<void> updateTransactionStatus(
+    String transactionId,
+    OrderStatus status,
+  ) async {
+    state = state.copyWith(isLoading: true, error: null);
+    final result = await repository.updateOrderStatus(
+      orderId: transactionId,
+      status: status,
+    );
+
+    result.fold(
+      (failure) => state = state.copyWith(
+        isLoading: false,
+        error: failure.toString(),
+      ),
+      (_) => state = state.copyWith(
+        isLoading: false,
+      ),
+    );
+  }
+}
+
+// Provider
+final transactionProvider =
+    NotifierProvider<TransactionNotifier, TransactionState>(() {
+  return TransactionNotifier();
+});
